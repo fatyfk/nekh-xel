@@ -87,6 +87,8 @@ export async function loginAction(_prev: unknown, formData: FormData) {
 
 // ── Inscription ───────────────────────────────────────────────
 export async function registerAction(_prev: unknown, formData: FormData) {
+  console.log("[registerAction] called — email:", formData.get("email"), "role:", formData.get("role"));
+
   const raw = {
     firstName:       formData.get("firstName"),
     lastName:        formData.get("lastName"),
@@ -99,8 +101,10 @@ export async function registerAction(_prev: unknown, formData: FormData) {
 
   const parsed = registerSchema.safeParse(raw);
   if (!parsed.success) {
+    console.log("[registerAction] validation error:", parsed.error.issues[0].message);
     return { error: parsed.error.issues[0].message };
   }
+  console.log("[registerAction] validation OK — proceeding to signUp");
 
   try {
     const supabase = await createClient();
@@ -117,6 +121,8 @@ export async function registerAction(_prev: unknown, formData: FormData) {
       },
     });
 
+    console.log("[registerAction] signUp →", { error: error?.message ?? null });
+
     if (error) {
       if (error.message.toLowerCase().includes("already registered")) {
         return { error: "Un compte existe déjà avec cet email." };
@@ -128,6 +134,7 @@ export async function registerAction(_prev: unknown, formData: FormData) {
     return { error: "Une erreur inattendue est survenue. Réessayez." };
   }
 
+  console.log("[registerAction] success");
   return { success: "Compte créé ! Vérifiez votre boîte mail pour confirmer votre adresse." };
 }
 
