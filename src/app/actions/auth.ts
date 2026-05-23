@@ -17,6 +17,8 @@ const ROLE_REDIRECTS: Record<string, string> = {
 
 // ── Connexion ──────────────────────────────────────────────────
 export async function loginAction(_prev: unknown, formData: FormData) {
+  console.log("[loginAction] called — email:", formData.get("email"));
+
   const raw = {
     email:    formData.get("email"),
     password: formData.get("password"),
@@ -25,34 +27,62 @@ export async function loginAction(_prev: unknown, formData: FormData) {
 
   const parsed = loginSchema.safeParse(raw);
   if (!parsed.success) {
-    return { error: parsed.error.issues[0].message };
+    const msg = parsed.error.issues[0].message;
+    console.log("[loginAction] validation error:", msg);
+    return { error: msg };
   }
 
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email:    parsed.data.email,
-    password: parsed.data.password,
-  });
+  // redirect() doit être appelé HORS du try/catch car il lève une erreur intentionnelle
+  let redirectPath: string;
 
-  if (error) {
-    if (error.message.includes("Invalid login credentials")) {
-      return { error: "Email ou mot de passe incorrect" };
+  try {
+    const supabase = await createClient();
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email:    parsed.data.email,
+      password: parsed.data.password,
+    });
+
+    console.log("[loginAction] signInWithPassword →", {
+      userId:  data?.user?.id ?? null,
+      error:   error?.message ?? null,
+    });
+
+    if (error) {
+      if (error.message.toLowerCase().includes("invalid login credentials")) {
+        return { error: "Email ou mot de passe incorrect." };
+      }
+      if (error.message.toLowerCase().includes("email not confirmed")) {
+        return { error: "Confirmez votre adresse e-mail avant de vous connecter." };
+      }
+      return { error: `Erreur Supabase : ${error.message}` };
     }
-    if (error.message.includes("Email not confirmed")) {
-      return { error: "Veuillez confirmer votre adresse e-mail avant de vous connecter" };
+
+    if (!data.user) {
+      return { error: "Connexion échouée : session introuvable. Réessayez." };
     }
-    return { error: "Une erreur est survenue. Réessayez." };
+
+    // Récupérer le rôle
+    const { data: profile, error: profileErr } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", data.user.id)
+      .single();
+
+    console.log("[loginAction] profile →", {
+      role:        profile?.role ?? null,
+      profileErr:  profileErr?.message ?? null,
+    });
+
+    const role = profile?.role ?? "student";
+    redirectPath = ROLE_REDIRECTS[role] ?? "/dashboard/student";
+  } catch (err) {
+    console.error("[loginAction] unexpected error:", err);
+    return { error: "Une erreur inattendue est survenue. Réessayez." };
   }
 
-  // Récupérer le rôle depuis le profil
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("role")
-    .eq("id", data.user.id)
-    .single();
-
-  const role = profile?.role ?? "student";
-  redirect(ROLE_REDIRECTS[role] ?? "/dashboard/student");
+  // Hors try/catch — lève NEXT_REDIRECT intentionnellement
+  redirect(redirectPath);
 }
 
 // ── Inscription ───────────────────────────────────────────────
@@ -72,25 +102,30 @@ export async function registerAction(_prev: unknown, formData: FormData) {
     return { error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signUp({
-    email:    parsed.data.email,
-    password: parsed.data.password,
-    options: {
-      data: {
-        first_name: parsed.data.firstName,
-        last_name:  parsed.data.lastName,
-        role:       parsed.data.role,
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase.auth.signUp({
+      email:    parsed.data.email,
+      password: parsed.data.password,
+      options: {
+        data: {
+          first_name: parsed.data.firstName,
+          last_name:  parsed.data.lastName,
+          role:       parsed.data.role,
+        },
+        emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`,
       },
-      emailRedirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback`,
-    },
-  });
+    });
 
-  if (error) {
-    if (error.message.includes("already registered")) {
-      return { error: "Un compte existe déjà avec cet email" };
+    if (error) {
+      if (error.message.toLowerCase().includes("already registered")) {
+        return { error: "Un compte existe déjà avec cet email." };
+      }
+      return { error: `Erreur Supabase : ${error.message}` };
     }
-    return { error: "Impossible de créer le compte. Réessayez." };
+  } catch (err) {
+    console.error("[registerAction] unexpected error:", err);
+    return { error: "Une erreur inattendue est survenue. Réessayez." };
   }
 
   return { success: "Compte créé ! Vérifiez votre boîte mail pour confirmer votre adresse." };
@@ -105,12 +140,17 @@ export async function forgotPasswordAction(_prev: unknown, formData: FormData) {
     return { error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
-    redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback?next=/reset-password`,
-  });
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email, {
+      redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/auth/callback?next=/reset-password`,
+    });
 
-  if (error) {
+    if (error) {
+      return { error: `Erreur Supabase : ${error.message}` };
+    }
+  } catch (err) {
+    console.error("[forgotPasswordAction] unexpected error:", err);
     return { error: "Impossible d'envoyer l'email. Réessayez." };
   }
 
