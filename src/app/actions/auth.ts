@@ -87,26 +87,28 @@ export async function loginAction(_prev: unknown, formData: FormData) {
 
 // ── Inscription ───────────────────────────────────────────────
 export async function registerAction(_prev: unknown, formData: FormData) {
-  console.log("[registerAction] called — email:", formData.get("email"), "role:", formData.get("role"));
-
-  const raw = {
-    firstName:       formData.get("firstName"),
-    lastName:        formData.get("lastName"),
-    email:           formData.get("email"),
-    password:        formData.get("password"),
-    confirmPassword: formData.get("confirmPassword"),
-    role:            formData.get("role"),
-    terms:           formData.get("terms") === "on" ? true : undefined,
-  };
-
-  const parsed = registerSchema.safeParse(raw);
-  if (!parsed.success) {
-    console.log("[registerAction] validation error:", parsed.error.issues[0].message);
-    return { error: parsed.error.issues[0].message };
-  }
-  console.log("[registerAction] validation OK — proceeding to signUp");
-
   try {
+    console.log("[registerAction] called — email:", formData.get("email"), "role:", formData.get("role"));
+    console.log("[registerAction] env check — SUPABASE_URL set:", !!process.env.NEXT_PUBLIC_SUPABASE_URL, "ANON_KEY set:", !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+
+    const raw = {
+      firstName:       formData.get("firstName"),
+      lastName:        formData.get("lastName"),
+      email:           formData.get("email"),
+      password:        formData.get("password"),
+      confirmPassword: formData.get("confirmPassword"),
+      role:            formData.get("role"),
+      terms:           formData.get("terms") === "on" ? true : undefined,
+    };
+
+    const parsed = registerSchema.safeParse(raw);
+    if (!parsed.success) {
+      const msg = parsed.error.issues[0]?.message ?? "Données invalides. Vérifiez le formulaire.";
+      console.log("[registerAction] validation error:", msg);
+      return { error: msg };
+    }
+    console.log("[registerAction] validation OK — proceeding to signUp");
+
     const supabase = await createClient();
     const { error } = await supabase.auth.signUp({
       email:    parsed.data.email,
@@ -127,15 +129,15 @@ export async function registerAction(_prev: unknown, formData: FormData) {
       if (error.message.toLowerCase().includes("already registered")) {
         return { error: "Un compte existe déjà avec cet email." };
       }
-      return { error: `Erreur Supabase : ${error.message}` };
+      return { error: `Erreur lors de la création du compte : ${error.message}` };
     }
-  } catch (err) {
-    console.error("[registerAction] unexpected error:", err);
-    return { error: "Une erreur inattendue est survenue. Réessayez." };
-  }
 
-  console.log("[registerAction] success");
-  return { success: "Compte créé ! Vérifiez votre boîte mail pour confirmer votre adresse." };
+    console.log("[registerAction] success");
+    return { success: "Compte créé ! Vérifiez votre boîte mail pour confirmer votre adresse." };
+  } catch (err) {
+    console.error("[registerAction] UNCAUGHT error:", err);
+    return { error: "Une erreur inattendue est survenue. Réessayez dans quelques instants." };
+  }
 }
 
 // ── Mot de passe oublié ───────────────────────────────────────
