@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 import {
   loginSchema,
   registerSchema,
@@ -95,7 +96,7 @@ export async function loginAction(_prev: unknown, formData: FormData) {
 export async function registerAction(_prev: unknown, formData: FormData) {
   try {
     console.log("[registerAction] called — email:", formData.get("email"), "role:", formData.get("role"));
-    console.log("[registerAction] env check — SUPABASE_URL set:", !!process.env.NEXT_PUBLIC_SUPABASE_URL, "ANON_KEY set:", !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+    console.log("[registerAction] env check — URL:", !!process.env.NEXT_PUBLIC_SUPABASE_URL, "ANON:", !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, "SERVICE_ROLE:", !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 
     const raw = {
       firstName:       formData.get("firstName"),
@@ -116,7 +117,7 @@ export async function registerAction(_prev: unknown, formData: FormData) {
     console.log("[registerAction] validation OK — proceeding to signUp");
 
     const supabase = await createClient();
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email:    parsed.data.email,
       password: parsed.data.password,
       options: {
@@ -129,16 +130,78 @@ export async function registerAction(_prev: unknown, formData: FormData) {
       },
     });
 
-    console.log("[registerAction] signUp →", { error: error?.message ?? null });
+    console.log("[registerAction] signUp →", {
+      userId:  data?.user?.id ?? null,
+      session: data?.session ? "active" : "null (confirmation email ou échec)",
+      error:   error?.message ?? null,
+    });
 
     if (error) {
       if (error.message.toLowerCase().includes("already registered")) {
         return { error: "Un compte existe déjà avec cet email." };
       }
+      console.error("[registerAction] signUp error:", error.message);
       return { error: `Erreur lors de la création du compte : ${error.message}` };
     }
 
-    console.log("[registerAction] success");
+    // Supabase peut renvoyer error=null mais user=null (protection anti-énumération
+    // ou email déjà utilisé avec confirmation en attente).
+    if (!data.user || !data.user.id) {
+      console.error("[registerAction] signUp sans erreur mais user null — email probablement déjà utilisé");
+      return { error: "Le compte n'a pas pu être créé. Cet email est peut-être déjà utilisé." };
+    }
+
+    console.log("[registerAction] user created in auth.users — id:", data.user.id);
+
+    // Vérifier et créer le profil via le client admin (service role bypasse RLS).
+    // Nécessaire car sans session active auth.uid() est null → le client anon
+    // ne peut pas lire public.profiles (RLS bloqué).
+    const admin = createAdminClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } },
+    );
+
+    const { data: profile, error: profileErr } = await admin
+      .from("profiles")
+      .select("id, role")
+      .eq("id", data.user.id)
+      .single();
+
+    console.log("[registerAction] profile check →", {
+      profileId:  profile?.id ?? null,
+      profileErr: profileErr?.message ?? null,
+    });
+
+    if (!profile) {
+      // Le trigger handle_new_user() n'a pas encore créé le profil (trigger absent
+      // ou exécution retardée). On l'insère manuellement.
+      console.warn("[registerAction] profil absent — insertion manuelle");
+      const { error: insertErr } = await admin
+        .from("profiles")
+        .upsert(
+          {
+            id:         data.user.id,
+            role:       parsed.data.role,
+            first_name: parsed.data.firstName,
+            last_name:  parsed.data.lastName,
+            email:      parsed.data.email,
+          },
+          { onConflict: "id" },
+        );
+
+      console.log("[registerAction] manual profile insert →", { error: insertErr?.message ?? null });
+
+      if (insertErr) {
+        console.error("[registerAction] profile insert failed:", insertErr.message);
+        return { error: "Compte créé mais profil introuvable. Réessayez ou contactez le support." };
+      }
+
+      console.log("[registerAction] profil créé manuellement — OK");
+    } else {
+      console.log("[registerAction] profil trouvé via trigger — role:", profile.role);
+    }
+
     return { success: "Compte créé ! Vérifiez votre boîte mail pour confirmer votre adresse." };
   } catch (err) {
     console.error("[registerAction] UNCAUGHT error:", err);
