@@ -46,42 +46,54 @@ export async function loginAction(_prev: unknown, formData: FormData) {
     });
 
     console.log("[loginAction] signInWithPassword →", {
-      userId:  data?.user?.id ?? null,
-      error:   error?.message ?? null,
+      userId: data?.user?.id ?? null,
+      error:  error?.message ?? null,
     });
 
     if (error) {
-      if (error.message.toLowerCase().includes("invalid login credentials")) {
+      const msg = error.message.toLowerCase();
+      if (msg.includes("invalid login credentials") || msg.includes("invalid credentials")) {
         return { error: "Email ou mot de passe incorrect." };
       }
-      if (error.message.toLowerCase().includes("email not confirmed")) {
+      if (msg.includes("email not confirmed") || msg.includes("not confirmed")) {
         return { error: "Confirmez votre adresse e-mail avant de vous connecter." };
       }
-      return { error: `Erreur Supabase : ${error.message}` };
+      // Afficher le message Supabase réel pour faciliter le diagnostic
+      return { error: `Erreur de connexion : ${error.message}` };
     }
 
-    if (!data.user) {
+    if (!data.user || !data.user.id) {
+      console.error("[loginAction] signInWithPassword sans erreur mais user null");
       return { error: "Connexion échouée : session introuvable. Réessayez." };
     }
 
-    // Récupérer le rôle
-    const { data: profile, error: profileErr } = await supabase
+    console.log("[loginAction] user authenticated — id:", data.user.id);
+
+    // Lire le profil via le client admin (service role bypasse RLS).
+    // Évite tout blocage si les politiques RLS ne sont pas encore appliquées.
+    const admin = createAdminClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } },
+    );
+
+    const { data: profile, error: profileErr } = await admin
       .from("profiles")
       .select("role")
       .eq("id", data.user.id)
       .single();
 
-    if (!profile || profileErr) {
-      console.warn("[loginAction] profil introuvable ou erreur RLS —", profileErr?.message ?? "aucun profil");
-    }
-
     console.log("[loginAction] profile →", {
-      role:        profile?.role ?? null,
-      profileErr:  profileErr?.message ?? null,
+      role:       profile?.role ?? null,
+      profileErr: profileErr?.message ?? null,
     });
 
-    const role = profile?.role ?? "student";
-    redirectPath = ROLE_REDIRECTS[role] ?? "/dashboard/student";
+    if (!profile) {
+      console.error("[loginAction] profil introuvable pour user:", data.user.id, "—", profileErr?.message);
+      return { error: "Profil utilisateur introuvable. Contactez l'administrateur." };
+    }
+
+    redirectPath = ROLE_REDIRECTS[profile.role] ?? "/dashboard/student";
     console.log("[loginAction] redirect →", redirectPath);
   } catch (err) {
     console.error("[loginAction] unexpected error:", err);
