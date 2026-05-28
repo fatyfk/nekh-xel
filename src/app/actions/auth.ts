@@ -9,10 +9,11 @@ import {
 } from "@/lib/validations/auth";
 
 const ROLE_REDIRECTS: Record<string, string> = {
-  student: "/dashboard/student",
-  teacher: "/dashboard/teacher",
-  parent:  "/dashboard/parent",
-  admin:   "/dashboard/admin",
+  student:     "/dashboard/student",
+  teacher:     "/dashboard/teacher",
+  parent:      "/dashboard/parent",
+  admin:       "/dashboard/admin",
+  super_admin: "/dashboard/admin",
 };
 
 // ── Connexion ──────────────────────────────────────────────────
@@ -69,6 +70,10 @@ export async function loginAction(_prev: unknown, formData: FormData) {
       .eq("id", data.user.id)
       .single();
 
+    if (!profile || profileErr) {
+      console.warn("[loginAction] profil introuvable ou erreur RLS —", profileErr?.message ?? "aucun profil");
+    }
+
     console.log("[loginAction] profile →", {
       role:        profile?.role ?? null,
       profileErr:  profileErr?.message ?? null,
@@ -76,6 +81,7 @@ export async function loginAction(_prev: unknown, formData: FormData) {
 
     const role = profile?.role ?? "student";
     redirectPath = ROLE_REDIRECTS[role] ?? "/dashboard/student";
+    console.log("[loginAction] redirect →", redirectPath);
   } catch (err) {
     console.error("[loginAction] unexpected error:", err);
     return { error: "Une erreur inattendue est survenue. Réessayez." };
